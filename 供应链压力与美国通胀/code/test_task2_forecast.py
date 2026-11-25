@@ -1,3 +1,4 @@
+from math import erfc, sqrt
 import unittest
 
 import numpy as np
@@ -6,7 +7,8 @@ from sklearn.ensemble import RandomForestRegressor
 
 from task2_forecast import (
     BREAK, CONTROLS, GSCPI, HORIZONS, INITIAL_N, LAGS, MODELS, ROOT, TARGET,
-    calculate_metrics, common_rows, direct_frame, dm_results, dm_statistic,
+    calculate_metrics, clark_west_loss, clark_west_results, clark_west_statistic,
+    common_rows, direct_frame, dm_results, dm_statistic, paired_forecasts, read_forecasts,
     load_inputs, ols_fit, rf_splits, select_order, subperiod, training_at,
 )
 
@@ -91,6 +93,62 @@ class ForecastTests(unittest.TestCase):
         self.assertAlmostEqual(dm_statistic(-loss, 2)[1], p)
         self.assertFalse(np.isfinite(dm_statistic(pd.Series(0.0, index=months), 2)[0]))
 
+    def test_clark_west_squared_forecast_difference_adjustment(self):
+        actual = np.array([4., 2.])
+        restricted = np.array([1., 3.])
+        unrestricted = np.array([2., 5.])
+        # Restricted squared errors 9 and 1; unrestricted 4 and 9; adjustment 1 and 4.
+        np.testing.assert_array_equal(clark_west_loss(actual, restricted, unrestricted), [6., -4.])
+
+    def test_clark_west_direction_and_one_sided_tail(self):
+        months = pd.period_range("2020-01", periods=4, freq="M")
+        actual = pd.Series([1., 2., 3., 4.], index=months)
+        restricted = pd.Series(0., index=months)
+        unrestricted = pd.Series(1., index=months)
+        positive = clark_west_loss(actual, restricted, unrestricted)
+        reversed_diff = clark_west_loss(actual, unrestricted, restricted)
+        z, p = clark_west_statistic(positive, 1)
+        z_reverse, p_reverse = clark_west_statistic(reversed_diff, 1)
+        self.assertGreater(z, 0)
+        self.assertLess(z_reverse, 0)
+        self.assertAlmostEqual(p, erfc(z / sqrt(2)) / 2)
+        self.assertAlmostEqual(p_reverse, erfc(z_reverse / sqrt(2)) / 2)
+        self.assertLess(p, .5)
+        self.assertGreater(p_reverse, .5)
+
+    def test_clark_west_hac_reaches_h_minus_one_for_each_horizon(self):
+        months = pd.period_range("2020-01", periods=8, freq="M")
+        loss = pd.Series([1., 2., 4., 3., 5., 8., 6., 9.], index=months)
+        n = len(loss)
+        centered = loss.to_numpy() - loss.mean()
+        for h in HORIZONS:
+            covariances = [sum(centered[j] * centered[j-lag] for j in range(lag, n)) / n
+                           for lag in range(h)]
+            variance = covariances[0] + 2 * sum((1 - lag / h) * covariances[lag] for lag in range(1, h))
+            expected = loss.mean() / sqrt(variance / n)
+            z, p = clark_west_statistic(loss, h)
+            self.assertAlmostEqual(z, expected)
+            self.assertAlmostEqual(p, erfc(expected / sqrt(2)) / 2)
+
+    def test_clark_west_hac_uses_calendar_pairs_across_gaps(self):
+        dates = pd.PeriodIndex(["2020-01", "2020-02", "2020-04", "2020-05"], freq="M")
+        loss = pd.Series([0., 1., 3., 4.], index=dates)
+        # Lag 1 products are 2 + 2; lag 2 has the single Feb–Apr product -1.
+        expected_lrv = 2.5 + 2 * ((2/3) * (4/4) + (1/3) * (-1/4))
+        expected = 2 / sqrt(expected_lrv / 4)
+        self.assertAlmostEqual(clark_west_statistic(loss, 3)[0], expected)
+        compressed = loss.set_axis(pd.period_range("2020-01", periods=4, freq="M"))
+        self.assertNotAlmostEqual(clark_west_statistic(compressed, 3)[0], expected)
+
+    def test_pairing_rejects_misaligned_forecasts(self):
+        forecasts = read_forecasts(ROOT / "data" / "processed" / "task2_forecasts.csv")
+        with self.assertRaisesRegex(ValueError, "paired calendar months"):
+            paired_forecasts(forecasts.iloc[1:], 1)
+        invalid = forecasts.copy()
+        invalid.loc[0, "forecast_origin"] -= 1
+        with self.assertRaisesRegex(ValueError, "paired calendar months"):
+            paired_forecasts(invalid, 1)
+
     def test_target_month_controls_period_and_metric_sign(self):
         months = pd.PeriodIndex(["2019-12", "2020-01"], freq="M")
         self.assertEqual(list(subperiod(months)), ["Pre-COVID", "Post-COVID"])
@@ -103,10 +161,7 @@ class ForecastTests(unittest.TestCase):
 
     def test_delivered_forecasts_have_common_dates_and_traceable_training(self):
         data = ROOT / "data" / "processed"
-        f = pd.read_csv(data / "task2_forecasts.csv")
-        f["forecast_origin"] = pd.PeriodIndex(f.forecast_origin, freq="M")
-        f["target_month"] = pd.PeriodIndex(f.target_month, freq="M")
-        f["train_last_target_month"] = pd.PeriodIndex(f.train_last_target_month, freq="M")
+        f = read_forecasts(data / "task2_forecasts.csv")
         self.assertFalse(f.duplicated(["forecast_origin", "horizon", "model"]).any())
         self.assertTrue(np.isfinite(f[["actual", "prediction"]]).all().all())
         for h in HORIZONS:
@@ -134,6 +189,17 @@ class ForecastTests(unittest.TestCase):
         actual = dm_results(f)
         np.testing.assert_allclose(actual[["dm_stat", "p_value"]],
                                    expected[["dm_stat", "p_value"]], atol=1e-10)
+        self.assertEqual(set(actual.model_a), {"Random Forest"})
+        self.assertEqual(set(actual.model_b), {"ARX-GSCPI"})
+        self.assertEqual(len(actual), 3)
+        expected = pd.read_csv(data / "task2_clark_west_tests.csv")
+        actual = clark_west_results(f)
+        self.assertEqual(len(actual), 6)
+        self.assertEqual(set(zip(actual.restricted_model, actual.unrestricted_model)),
+                         {("AR", "ARX-Base"), ("ARX-Base", "ARX-GSCPI")})
+        self.assertTrue((actual.hac_lag == actual.horizon - 1).all())
+        fields = ["mean_adjusted_loss_diff", "cw_stat", "p_value_one_sided"]
+        np.testing.assert_allclose(actual[fields], expected[fields], atol=1e-10)
         self.assertEqual(str(BREAK), "2020-01")
 
 

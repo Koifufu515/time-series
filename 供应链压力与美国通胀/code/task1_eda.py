@@ -72,7 +72,7 @@ def describe(panel):
                 "missing": series.isna().sum(), "mean": series.mean(), "sd": series.std(),
                 "min": series.min(), "p25": series.quantile(.25), "median": series.median(),
                 "p75": series.quantile(.75), "max": series.max(), "skew": series.skew(),
-                "excess_kurtosis_fisher": series.kurt(),
+                "excess_kurtosis": series.kurt(),
                 "lag1_r": series.corr(series.shift()),
             })
     return pd.DataFrame(records)
@@ -278,11 +278,11 @@ def render_report(path, snapshot, summary, tests, leads, serial, panel):
         "",
         "## 描述统计与分期比较",
         "",
-        "超额峰度采用 Fisher 定义，正态分布为 0，以 pandas 的无偏估计计算。",
+        "超额峰度字段为 excess_kurtosis，采用 Fisher 定义，正态分布为 0，以 pandas 的无偏估计计算。",
         "",
         markdown_table(["时期", "序列", "单位", "有效 n", "缺失", "均值", "样本标准差", "最小", "中位数", "最大", "偏度", "Fisher 超额峰度", "一阶 Pearson r"],
             ([period, LABELS[name], UNITS[name], int(r.n), int(r.missing),
-              *(f"{r[c]:.3f}" for c in ["mean", "sd", "min", "median", "max", "skew", "excess_kurtosis_fisher", "lag1_r"])]
+              *(f"{r[c]:.3f}" for c in ["mean", "sd", "min", "median", "max", "skew", "excess_kurtosis", "lag1_r"])]
              for (period, name), r in desc.iterrows())),
         "",
         *(f"- {LABELS[name]}在两个时期的均值分别为 {desc.loc[('1997–2019', name), 'mean']:.3f}、"

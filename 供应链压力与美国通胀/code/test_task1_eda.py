@@ -4,8 +4,9 @@ import unittest
 
 import numpy as np
 import pandas as pd
+from scipy.stats import kurtosis
 
-from task1_eda import (HORIZONS, TARGETS, derive, lead_correlations, load_panel,
+from task1_eda import (HORIZONS, TARGETS, WINDOWS, derive, describe, lead_correlations, load_panel,
                       logged_change, longest_contiguous, serial_correlations, stationarity)
 
 
@@ -75,6 +76,18 @@ class Task1Tests(unittest.TestCase):
         curves = serial_correlations(self.panel)
         self.assertEqual(len(curves), 5 * 25)
         self.assertTrue((curves.loc[curves.lag.eq(0), ["acf", "pacf"]] == 1).all().all())
+
+    def test_fisher_excess_kurtosis_matches_independent_estimator(self):
+        columns = describe(self.panel)
+        delivered = pd.read_csv(ROOT / "data" / "processed" / "task1_descriptive.csv")
+        self.assertEqual(len(columns), len(delivered))
+        self.assertNotIn("excess_kurtosis_fisher", delivered.columns)
+        np.testing.assert_allclose(columns.excess_kurtosis, delivered.excess_kurtosis, rtol=1e-10)
+        for row in delivered.itertuples(index=False):
+            start, end = WINDOWS[row.period]
+            values = self.panel.loc[start:end, row.series].dropna().to_numpy()
+            self.assertAlmostEqual(row.excess_kurtosis, kurtosis(values, fisher=True, bias=False),
+                                   places=9)
 
     def test_report_fingerprints_task0_snapshot(self):
         report = ROOT / "reports" / "task1_eda.md"
