@@ -1,0 +1,4 @@
+-r requirements.txt
+statsmodels==0.14.6
+scipy==1.15.3
+patsy==1.0.2
