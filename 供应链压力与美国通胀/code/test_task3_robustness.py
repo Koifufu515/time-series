@@ -1,13 +1,15 @@
+from math import erfc, sqrt
 import unittest
 
 import numpy as np
 import pandas as pd
 from statsmodels.stats.multitest import multipletests
 
-from task2_forecast import GSCPI, HORIZONS, LAGS, ROOT, TARGET, load_inputs, read_forecasts, training_at
+from task2_forecast import (GSCPI, HORIZONS, LAGS, ROOT, TARGET, clark_west_statistic,
+                            load_inputs, read_forecasts, training_at)
 from task3_report import report_tables, typst_body
-from task3_robustness import (BASE, HEADLINE, LEVEL, TRANSFORMS, experiment_rows, holm_adjust,
-                              holm_table, segmented_cw, subperiod_cw, summarize)
+from task3_robustness import (BASE, HEADLINE, LEVEL, TRANSFORMS, cw_row, experiment_rows,
+                              holm_adjust, holm_table, subperiod_cw, summarize, verify_expanding_cw)
 
 
 class RobustnessTests(unittest.TestCase):
@@ -33,12 +35,33 @@ class RobustnessTests(unittest.TestCase):
         saved = pd.read_csv(self.data / "task3_holm.csv")
         np.testing.assert_allclose(new.holm_p, saved.holm_p)
 
-    def test_cw_omits_pairs_spanning_a_missing_calendar_month(self):
+    def test_cw_pairs_by_calendar_lag_across_missing_month(self):
         idx = pd.PeriodIndex(["2020-01", "2020-02", "2020-04", "2020-05"], freq="M")
         loss = pd.Series([0., 1., 3., 4.], index=idx)
-        # Lag one contributes 2+2. The nominal lag-two Feb–Apr pair crosses March.
-        lrv = 2.5 + 2 * (2/3) * (4/4)
-        self.assertAlmostEqual(segmented_cw(loss, 3)[0], 2 / np.sqrt(lrv / 4))
+        # Lag 1 contributes 2 + 2. Lag 2 contributes -1 for Feb–Apr, across missing March.
+        lrv = 2.5 + 2 * ((2/3) * (4/4) + (1/3) * (-1/4))
+        expected = 2 / sqrt(lrv / 4)
+        # Use forecasts whose adjusted difference is exactly the test loss series.
+        restricted = pd.Series(0., index=idx)
+        unrestricted = pd.Series(1., index=idx)
+        result = cw_row(loss / 2, restricted, unrestricted, 3)
+        self.assertAlmostEqual(result["cw_stat"], expected)
+        self.assertAlmostEqual(result["p_value_one_sided"], erfc(expected / sqrt(2)) / 2)
+        self.assertEqual((result["n"], result["hac_lag"]), (4, 2))
+        self.assertEqual((result["cw_stat"], result["p_value_one_sided"]),
+                         clark_west_statistic(loss, 3))
+
+    def test_expanding_inference_matches_task2_1_exactly(self):
+        _, new = summarize(self.new)
+        verify_expanding_cw(new, self.frozen)
+        fields = ["horizon", "n", "hac_lag", "mean_adjusted_loss_diff", "cw_stat", "p_value_one_sided"]
+        previous = pd.read_csv(self.data / "task2_clark_west_tests.csv")
+        saved = pd.read_csv(self.data / "task3_window_cw.csv")
+        pd.testing.assert_frame_equal(
+            saved.loc[saved.window.eq("Expanding"), fields].reset_index(drop=True),
+            previous.loc[previous.unrestricted_model.eq(LEVEL), fields].reset_index(drop=True),
+            check_exact=True,
+        )
 
     def test_subperiod_pairs_use_target_month(self):
         cw = subperiod_cw(self.frozen)

@@ -20,7 +20,8 @@ VAR_NAME = {"pce_goods_mom_pct": "商品 PCE 月环比", "pce_mom_pct": "整体 
 MATH = {
     "target": r'pi_t = 100 (frac(P_t, P_(t-1)) - 1)',
     "ar": r'hat(pi)_(t+h)^(A R) = alpha_h + sum_(i=0)^(p_h-1) phi_(h,i) pi_(t-i)',
-    "arx": r'hat(pi)_(t+h)^(G) = hat(pi)_(t+h)^(B) + beta_(h,3) G_t',
+    "arx_base": r'hat(pi)_(t+h)^B = hat(alpha)_h^B + sum_(i=0)^(p_h-1) hat(phi)_(h,i)^B pi_(t-i) + hat(beta)_(h,1)^B W_t + hat(beta)_(h,2)^B Delta U_t',
+    "arx_gscpi": r'hat(pi)_(t+h)^G = hat(alpha)_h^G + sum_(i=0)^(p_h-1) hat(phi)_(h,i)^G pi_(t-i) + hat(beta)_(h,1)^G W_t + hat(beta)_(h,2)^G Delta U_t + hat(beta)_(h,3)^G G_t',
     "rf": r'hat(pi)_(t+h)^(R F) = frac(1,300) sum_(b=1)^300 T_(h,b)(X_t)',
     "error": r'"RMSE" = sqrt(frac(sum_t e_t^2,N)), quad "MAE" = frac(sum_t abs(e_t),N), quad e_t = y_t-hat(y)_t',
     "cw": r'd_t = e_(R,t)^2 - e_(U,t)^2 + (hat(y)_(R,t)-hat(y)_(U,t))^2',
@@ -28,7 +29,8 @@ MATH = {
 MD_MATH = {
     "target": r"\pi_t=100\left(\frac{P_t}{P_{t-1}}-1\right)",
     "ar": r"\hat\pi_{t+h}^{AR}=\alpha_h+\sum_{i=0}^{p_h-1}\phi_{h,i}\pi_{t-i}",
-    "arx": r"\hat\pi_{t+h}^{G}=\hat\pi_{t+h}^{B}+\beta_{h,3}G_t",
+    "arx_base": r"\hat\pi_{t+h}^{B}=\hat\alpha_h^{B}+\sum_{i=0}^{p_h-1}\hat\phi_{h,i}^{B}\pi_{t-i}+\hat\beta_{h,1}^{B}W_t+\hat\beta_{h,2}^{B}\Delta U_t",
+    "arx_gscpi": r"\hat\pi_{t+h}^{G}=\hat\alpha_h^{G}+\sum_{i=0}^{p_h-1}\hat\phi_{h,i}^{G}\pi_{t-i}+\hat\beta_{h,1}^{G}W_t+\hat\beta_{h,2}^{G}\Delta U_t+\hat\beta_{h,3}^{G}G_t",
     "rf": r"\hat\pi_{t+h}^{RF}=\frac{1}{300}\sum_{b=1}^{300}T_{h,b}(X_t)",
     "error": r"\mathrm{RMSE}=\sqrt{\frac{\sum_t e_t^2}{N}},\quad \mathrm{MAE}=\frac{\sum_t|e_t|}{N},\quad e_t=y_t-\hat y_t",
     "cw": r"d_t=e_{R,t}^2-e_{U,t}^2+(\hat y_{R,t}-\hat y_{U,t})^2",
@@ -151,33 +153,23 @@ def inline(text):
 
 PREAMBLE = r'''
 #set document(title: "全球供应链压力与美国商品通胀预测", date: none)
-#set text(font: ("STIX Two Text", "Songti SC"), lang: "zh", size: 11.6pt, fill: rgb("#202B32"))
-#set par(justify: true, leading: 0.87em, spacing: 0.95em)
-#set page(paper: "a4", margin: (top: 26mm, bottom: 23mm, x: 24mm),
-  header: context if counter(page).get().first() > 1 [
-    #set text(font: "PingFang SC", size: 8pt, fill: rgb("#59717D"))
-    全球供应链压力与美国商品通胀预测
-    #h(1fr) 课程研究报告
-    #v(3pt)
-    #line(length: 100%, stroke: 0.55pt + rgb("#BDD0D8"))
-  ],
-  footer: context align(right, text(font: "PingFang SC", size: 8.5pt,
-    fill: rgb("#59717D"), counter(page).display("1"))))
-#show heading: set text(font: ("PingFang SC", "STIX Two Text"), fill: rgb("#163C51"))
-#show heading.where(level: 1): set text(size: 23pt)
-#show heading.where(level: 2): set text(size: 17pt)
+// Based on the user's document-organization-and-formatting/assets/coursework.typ.
+#set page(paper: "a4", margin: 2.5cm, numbering: "1")
+#set text(font: ("STIX Two Text", "Songti SC"), lang: "zh", size: 11pt)
+#set par(justify: true, leading: 0.95em, spacing: 0.85em)
+#set table(stroke: none, inset: (x: 6pt, y: 4pt))
+#show heading.where(level: 1): set text(size: 19pt)
+#show heading.where(level: 2): set text(size: 15pt)
 #show heading.where(level: 3): set text(size: 12pt)
 #show math.equation: set text(font: "STIX Two Math")
-#let caption(t) = block(above: 6pt, below: 6pt,
-  text(font: "PingFang SC", size: 9.5pt, fill: rgb("#225A73"), t))
-#let gridtable(n, header, body) = block(above: 6pt, below: 12pt)[
-  #set text(font: ("STIX Two Text", "PingFang SC"), size: 9.4pt)
+#let caption(t) = block(above: 5pt, below: 5pt, text(size: 9.5pt, t))
+#let gridtable(n, header, body) = block(above: 6pt, below: 10pt)[
+  #set text(size: 9pt)
   #table(columns: (1fr,) * n, align: (x,y) => if x == 0 {left} else {center},
-    inset: (x: 4pt, y: 4pt), stroke: none,
-    table.hline(stroke: 0.9pt + rgb("#39647A")),
+    table.hline(stroke: 0.8pt),
     table.header(..header.map(item => strong(item))),
-    table.hline(stroke: 0.55pt + rgb("#9DB9C8")), ..body,
-    table.hline(stroke: 0.9pt + rgb("#39647A")))
+    table.hline(stroke: 0.5pt), ..body,
+    table.hline(stroke: 0.8pt))
 ]
 '''
 

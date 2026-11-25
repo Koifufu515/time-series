@@ -132,9 +132,17 @@ t 表示起点的月度观测索引，h 是目标月相对起点月的观测期�
 
 @@MATH:ar@@
 
-ARX-Base 在上述预测值上加入 βₕ,₁Wₜ 和 βₕ,₂ΔUₜ。Wₜ 是 WTI 的月对数变化，ΔUₜ 是失业率的百分点变化。将两项加总后的 ARX-Base 预测记作带上标 B 的预测。完整的 ARX-GSCPI 在此基础上增加 Gₜ，后者是 GSCPI 水平，βₕ,₃ 描述给定其他预测量后的线性斜率。三个线性模型以带截距的 OLS 按期限分别重新估计。
+Wₜ 为 WTI 的月度对数变化，ΔUₜ 为失业率的百分点变化，Gₜ 为 GSCPI 水平。上标 B 和 G 分别表示 ARX-Base 和 ARX-GSCPI 估得的系数。
 
-@@MATH:arx@@
+**ARX-Base**
+
+@@MATH:arx_base@@
+
+**ARX-GSCPI**
+
+@@MATH:arx_gscpi@@
+
+两个模型按期限、按预测起点分别用带截距 OLS 估计全部系数，包括截距、通胀滞后项和共有控制变量的系数。两者采用同一组选阶和训练行，各自估计共有变量的系数。
 
 ### 4.2 随机森林
 
@@ -166,7 +174,7 @@ yₜ 表示评价目标月的实际环比，预测值以帽号表示，N 为配�
 
 @@MATH:cw@@
 
-非嵌套比较使用随机森林减线性 ARX-GSCPI 的平方损失差及双侧 Diebold–Mariano 检验。两类比较使用 Bartlett 权重及 h−1 阶 HAC。Task 3 新计算按连续日历区段配对，有缺月时排除跨缺口的自协方差项。对冻结主结果的 Holm 校正沿用 Task 2.1 原始 p 值。
+非嵌套比较使用随机森林减线性 ARX-GSCPI 的平方损失差及双侧 Diebold–Mariano 检验。两类比较采用 Bartlett 权重及 h−1 阶 HAC。第 k 阶自协方差只配对日历上恰好相隔 k 个月且两端有效的观测，允许中间有缺月。各阶分母为有效配对样本数 n，缺失月份保留。Holm 校正沿用 Task 2.1 冻结主结果的原始 p 值。
 
 <!-- pagebreak -->
 
@@ -208,13 +216,15 @@ WTI 和失业率的联合增量只在 1 个月得到校正后检验支持。Clar
 
 @@SUBPERIOD@@
 
-时期内 Clark–West 比较 ARX-GSCPI 和 ARX-Base。同一目标时段内分别估计调整损失差的均值及方差，它检验该时段的增量信息，跨期差异本身需要另设检验。疫情前组没有逐项 5% 的拒绝，2020 年起三个期限的逐项 p 值均低于 5%。每个后期样本仅有 79 个月，检验结果作为探索性异质性证据解读。
+时期内 Clark–West 比较 ARX-GSCPI 和 ARX-Base。表中为各时期、各期限的逐项单侧 p 值，未经多重校正。同一目标时段内分别估计调整损失差的均值及方差，它检验该时段的增量信息，跨期差异本身需要另设检验。疫情前组没有逐项 5% 的拒绝，2020 年起三个期限的逐项 p 值均低于 5%。每个后期样本仅有 79 个月，检验结果作为探索性异质性证据解读。
 
 1 个月两期由 ARX-GSCPI 取得最低 RMSE 和 MAE。3 个月，两项误差的领先模型均由 AR 转为 RF。6 个月疫情前 RMSE 和 MAE 分别由 RF 和 AR 领先，后期均由 ARX-GSCPI 领先。分组包括疫情冲击、高通胀与后续恢复，分组结果会受冲击强度、样本构成及价格变量条件分布变化影响。
 
 <!-- pagebreak -->
 
 ## 6　稳健性 A：整体 PCE 目标
+
+本节三项稳健性分析的 Clark–West 检验均在各自的共同评价样本内比较嵌套模型。表中列的是各规格、各期限的逐项单侧 p 值，未经多重校正。第 5.1 节 的 Holm 校正涵盖两个冻结主比较，每个家族包含三个期限。
 
 ![图 5　两种通胀目标的相对预测改善](../figures/task3_headline_goods.png)
 > 两种目标的 RMSE 均下降，商品相对改善在 3 个月更大，整体在 1 和 6 个月更大。
@@ -230,6 +240,8 @@ WTI 和失业率的联合增量只在 1 个月得到校正后检验支持。Clar
 <!-- pagebreak -->
 
 ## 6　稳健性 B：GSCPI 变量形式
+
+表中每个未经校正的单侧 p 值对应一种 GSCPI 形式在该期限与共同 ARX-Base 的比较。
 
 ![图 6　共同样本上的三种 GSCPI 形式](../figures/task3_gscpi_specification.png)
 > 当期水平在三个期限的两项误差改善都最大，一阶差分的相对改善接近零。
@@ -250,13 +262,13 @@ WTI 和失业率的联合增量只在 1 个月得到校正后检验支持。Clar
 
 @@WINDOW@@
 
-表中误差为百分点，RMSE 改善率相对于同窗口的 ARX-Base。加入 GSCPI 后，两种窗口下每个期限的 RMSE 和 MAE 均下降。滚动窗的三个 RMSE 改善分别为 6.85%、5.94% 和 4.84%，逐项 CW p 值均低于 5%。
+表中误差为百分点，RMSE 改善率相对于同窗口的 ARX-Base。逐项单侧 p 值未经校正，每个检验限于同窗口、同期限内的两模型。加入 GSCPI 后，两种窗口下每个期限的 RMSE 和 MAE 均下降。滚动窗的三个 RMSE 改善分别为 6.85%、5.94% 和 4.84%，逐项 CW p 值均低于 5%。
 
 ### 6.2 窗口结果怎么解读
 
 扩展窗中，ARX-GSCPI 的 1、3、6 个月 RMSE 均略低于同模型的滚动窗。3 个月的 MAE 则是滚动窗略低。固定长度能够让旧数据逐渐退出，权重更集中在近期，可能有利于适应关系变化，也会使可用于辨别稀有冲击的历史信息减少。此处 CW 检验的是**同窗口内部加入 GSCPI** 的增量，两个窗口的误差排序仅用于描述。
 
-新 CW 在缺口处切断自协方差的连续区段。由于 Task 2.1 的冻结估计允许按正确日历滞后跨缺口配对，局部 p 值可有轻微变化，例如扩展窗口 6 个月。预测与误差数值不受这一推断约定影响。
+扩展窗口的全期 Clark–West 统计量、平均调整损失差和单侧 p 值与 Task 2.1 对应结果完全一致。两个窗口均采用相同的日历滞后配对口径。
 
 <!-- pagebreak -->
 
@@ -342,6 +354,6 @@ Diebold, F. X., & Mariano, R. S. (1995). Comparing predictive accuracy. Journal 
 | 完整稳健性结果表与操作步骤 | reports/task3_robustness.md |
 | 测试与基线完整性核验 | reports/task3_test_results.md |
 
-在项目根目录以 code/requirements-task2.txt 安装 Python 依赖，运行 python3 code/task3_robustness.py 生成预测、结果表和图。运行 python3 code/task3_report.py 生成本文 Markdown 与 PDF。PDF 排版需要 Typst，以及 STIX Two Text、STIX Two Math、Songti SC、PingFang SC 字体。使用 python3 -m unittest discover -s code -v 验收。
+在项目根目录以 code/requirements-task2.txt 安装 Python 依赖，运行 python3 code/task3_robustness.py 生成预测、结果表和图。运行 python3 code/task3_report.py 生成本文 Markdown 与 PDF。PDF 排版需要 Typst，以及 STIX Two Text、STIX Two Math 和中文宋体。正文采用文档制作技能课程模板的 A4、2.5 cm 边距、11 pt 与两端对齐设置。模板中文字体为 Noto Serif CJK SC，本报告用本机可用的宋体 Songti SC 排版。使用 python3 -m unittest discover -s code -v 验收。
 
 预测数据的 forecast_origin 和 target_month 均使用 YYYY-MM。train_first_origin、train_last_target_month 和 train_n 记录实际用于拟合的样本边界及观测条数。辅助表和图优先引用这些已保存的结果，便于独立复算和审稿核对。

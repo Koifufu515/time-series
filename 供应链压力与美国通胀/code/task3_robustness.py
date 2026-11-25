@@ -7,11 +7,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
 
 from task2_forecast import (
     BREAK, CONTROLS, GSCPI, HORIZONS, INITIAL_N, LAGS, MODELS, ROOT, TARGET,
-    clark_west_loss, common_rows, direct_frame, load_inputs, ols_fit,
+    clark_west_loss, clark_west_results, clark_west_statistic, common_rows, direct_frame,
+    load_inputs, ols_fit,
     paired_forecasts, read_forecasts, select_order, table, training_at,
 )
 
@@ -49,32 +49,11 @@ def holm_table(previous):
     return pd.DataFrame(records)
 
 
-def segmented_cw(loss, horizon):
-    """Bartlett HAC using calendar lags only within continuous observed runs."""
-    idx = loss.index
-    if (horizon not in HORIZONS or not isinstance(idx, pd.PeriodIndex) or idx.freqstr != "M"
-            or idx.hasnans or not idx.is_unique or not idx.is_monotonic_increasing
-            or len(loss) <= horizon or not np.isfinite(loss).all()):
-        raise ValueError("Expected a finite, ordered series on unique monthly dates")
-    months = idx.asi8
-    runs = np.cumsum(np.r_[True, np.diff(months) != 1])
-    mean = loss.mean()
-    centered = loss.to_numpy() - mean
-    n = len(centered)
-    lrv = np.sum(centered ** 2) / n
-    for lag in range(1, horizon):
-        matched = (months[lag:] - months[:-lag] == lag) & (runs[lag:] == runs[:-lag])
-        covariance = np.sum(centered[lag:][matched] * centered[:-lag][matched]) / n
-        lrv += 2 * (1 - lag / horizon) * covariance
-    stat = mean / np.sqrt(lrv / n) if lrv > 0 else np.nan
-    return stat, norm.sf(stat)
-
-
 def cw_row(actual, restricted, unrestricted, horizon, **labels):
     if not actual.index.equals(restricted.index) or not actual.index.equals(unrestricted.index):
         raise ValueError("CW requires identical target dates")
     loss = clark_west_loss(actual, restricted, unrestricted)
-    stat, probability = segmented_cw(loss, horizon)
+    stat, probability = clark_west_statistic(loss, horizon)
     return {**labels, "horizon": horizon, "n": len(actual), "target_start": actual.index[0],
             "target_end": actual.index[-1], "hac_lag": horizon - 1,
             "mean_adjusted_loss_diff": loss.mean(), "cw_stat": stat, "p_value_one_sided": probability}
@@ -146,6 +125,10 @@ def summarize(forecasts):
     for (name, window, h), sample in forecasts.groupby(["experiment", "window", "horizon"], sort=False):
         models = sample.model.unique()
         actual, pred = paired_sample(sample, models)
+        # Match the precision of the frozen forecast CSV used by Task 2.1 inference.
+        # Use the full-precision estimates for the original RMSE/MAE calculations.
+        cw_actual = actual.map(lambda value: float(f"{value:.12g}"))
+        cw_pred = pred.apply(lambda column: column.map(lambda value: float(f"{value:.12g}")))
         base_error = actual - pred[BASE]
         base_rmse, base_mae = np.sqrt(np.mean(base_error ** 2)), np.mean(abs(base_error))
         for model in models:
@@ -157,9 +140,22 @@ def summarize(forecasts):
                             "rmse_improvement_pct": 100 * (1 - rmse / base_rmse),
                             "mae_improvement_pct": 100 * (1 - mae / base_mae)})
             if model != BASE:
-                tests.append(cw_row(actual, pred[BASE], pred[model], h, experiment=name, window=window,
+                tests.append(cw_row(cw_actual, cw_pred[BASE], cw_pred[model], h, experiment=name, window=window,
                                     restricted_model=BASE, unrestricted_model=model))
     return pd.DataFrame(metrics), pd.DataFrame(tests)
+
+
+def verify_expanding_cw(tests, frozen):
+    """Compare the task-wide expanding specification at the same forecast precision."""
+    fields = ["horizon", "n", "target_start", "target_end", "hac_lag",
+              "mean_adjusted_loss_diff", "cw_stat", "p_value_one_sided"]
+    expanding = tests.loc[tests.experiment.eq("Training window") & tests.window.eq("Expanding")
+                          & tests.restricted_model.eq(BASE) & tests.unrestricted_model.eq(LEVEL), fields]
+    baseline = clark_west_results(frozen).rename(columns={"first_target": "target_start",
+                                                          "last_target": "target_end"})
+    baseline = baseline.loc[baseline.restricted_model.eq(BASE) & baseline.unrestricted_model.eq(LEVEL), fields]
+    pd.testing.assert_frame_equal(expanding.reset_index(drop=True), baseline.reset_index(drop=True),
+                                  check_exact=True)
 
 
 def compare_frozen(new, frozen, horizon):
@@ -201,8 +197,9 @@ def brief(path, holm, periods, metrics, tests):
         "# Task 3 稳健性分析与复算说明", "",
         "使用 Task 2.1 冻结预测和 Task 0、1 月度快照。各试验按观测月索引进行伪样本外预测，历史实际发布日期和首次发布值未重建。"
         "模型按期限从共同初始 180 条有效记录以 AIC 比较 p=1…6，训练标签满足 s+h≤t，缺失起点由组内全体模型跳过。", "",
-        "新增 CW 使用右尾正态近似和 h−1 阶 Bartlett HAC。仅配对同一连续日期区段内恰好相隔对应月数的观测，"
-        "各阶协方差以总配对样本数为分母。Holm 直接使用冻结的 Task 2.1 p 值，两个家族各含三个期限。", "",
+        "CW 沿用 Task 2.1 的右尾正态近似与 h−1 阶 Bartlett HAC。第 k 阶只使用日历上恰好相隔 k 个月的"
+        "有效观测对，两端有效时允许中间有缺月，缺失月份保留，各阶协方差统一除以有效配对样本总数 n。"
+        "Holm 使用冻结的 Task 2.1 p 值，两个主检验家族各含三个期限。分期检验和三项稳健性试验均报告未经校正的逐项 p 值。", "",
         "## Holm 与时期异质性", "",
         table(["受限", "非受限", "h", "原始 p", "Holm p", "原始拒绝", "校正拒绝"], [
             [r.restricted_model, r.unrestricted_model, r.horizon, f"{r.raw_p:.4f}", f"{r.holm_p:.4f}",
@@ -215,7 +212,7 @@ def brief(path, holm, periods, metrics, tests):
         "A 使用整体 PCE 自己的历史及初始样本选阶，评价月与主规格相同。"
         "B 从 1997-10 统一开始建模，GSCPI 的滞后值和月差损失的首月留空。"
         "C 固定窗口每次使用最近 180 条完整且标签已可用的训练记录，因缺月可能横跨超过 180 个日历月。"
-        "C 扩展窗口逐月重新拟合，日期、训练样本和预测值与 T2 已核对。", "",
+        "C 扩展窗口逐月重新拟合，日期、训练样本和预测值与 T2 已核对。其全期 CW 统计量、单侧 p 值和平均调整损失差与 Task 2.1 完全一致。", "",
         "相对改善为 100×(1−模型误差/同组基准误差)，正值表示误差变小。新增检验的逐项 p 值用于稳健性描述。", "",
         table(["试验", "窗口", "h", "模型", "n", "p 阶", "RMSE", "MAE", "RMSE 改善%", "MAE 改善%"], [
             [r.experiment, r.window, r.horizon, r.model, r.n, r.ar_order, f"{r.rmse:.4f}", f"{r.mae:.4f}",
@@ -298,6 +295,7 @@ def main():
     periods = subperiod_cw(frozen)
     forecasts = run_experiments(monthly, task1, frozen)
     metrics, cw = summarize(forecasts)
+    verify_expanding_cw(cw, frozen)
     data, figures, reports = [destination / relative for relative in ("data/processed", "figures", "reports")]
     for directory in (data, figures, reports):
         directory.mkdir(parents=True, exist_ok=True)
