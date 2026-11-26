@@ -154,7 +154,10 @@ def inline(text):
 PREAMBLE = r'''
 #set document(title: "全球供应链压力与美国商品通胀预测", date: none)
 // Based on the user's document-organization-and-formatting/assets/coursework.typ.
-#set page(paper: "a4", margin: 2.5cm, numbering: "1")
+#set page(paper: "a4", margin: 2.5cm, footer: context {
+  let number = counter(page).get().first()
+  if number > 1 { align(center, text(size: 9pt, str(number - 1))) }
+})
 #set text(font: ("STIX Two Text", "Songti SC"), lang: "zh", size: 11pt)
 #set par(justify: true, leading: 0.95em, spacing: 0.85em)
 #set table(stroke: none, inset: (x: 6pt, y: 4pt))
@@ -176,7 +179,8 @@ PREAMBLE = r'''
 
 def typst_body(markdown):
     lines = markdown.splitlines()
-    result = []
+    has_cover = markdown.startswith("# 全球供应链压力")
+    result = ["#v(42mm)", "#align(center)[", "#set par(justify: false)"] if has_cover else []
     i = 0
     while i < len(lines):
         text = lines[i]
@@ -184,6 +188,9 @@ def typst_body(markdown):
         if not text:
             continue
         if text == PAGE_BREAK:
+            if has_cover:
+                result.append("]")
+                has_cover = False
             result.append("#pagebreak(weak: true)")
         elif text.startswith("@@MATH:"):
             result.append("$ " + MATH[text[7:-2]] + " $")
@@ -215,9 +222,52 @@ def typst_body(markdown):
     return "\n\n".join(result) + "\n"
 
 
+TABLE_TITLES = {
+    "DESCRIPTIVE": "表 2　全期描述统计。失业率变化的峰度反映明显的尾部波动。",
+    "REGIMES": "表 3　分期描述统计。2020 年起商品通胀和供应链压力的均值更高。",
+    "LEADS": "表 4　领先相关系数。一个月领先相关在 2020 年起样本更高。",
+    "ADF": "表 5　平稳性检验。GSCPI 水平与一阶差分呈现不同诊断结果。",
+    "SAMPLE": "表 6　共同评价样本。长预测期限的有效配对月数较少。",
+    "MAIN": "表 7　全期预测误差（百分点）。线性模型在 1、6 个月领先，随机森林在 3 个月领先。",
+    "HOLM": "表 8　主规格 Clark–West 检验。GSCPI 的三个期限在 Holm 校正后仍达到 5%。",
+    "DM": "表 9　随机森林与线性预测的比较。双侧检验均未达到 5%。",
+    "SUBPERIOD": "表 10　分期 Clark–West 检验。逐项增量证据集中在 2020 年起。",
+    "HEADLINE": "表 11　替换整体 PCE 目标。商品的相对 RMSE 改善在 3 个月更大。",
+    "SPECS": "表 12　GSCPI 变换。当期水平在共同样本上获得最大的误差改善。",
+    "WINDOW": "表 13　训练窗口比较。加入 GSCPI 后，两种窗口的 RMSE 均下降。",
+}
+
+
+def report_scalars():
+    data = ROOT / "data/processed"
+    metrics = pd.read_csv(data / "task2_metrics.csv")
+    full = metrics.loc[metrics.period.eq("Full")].set_index(["horizon", "model"])
+    holm = pd.read_csv(data / "task3_holm.csv")
+    holm = holm.loc[holm.unrestricted_model.eq(LEVEL)].set_index("horizon")
+    dm = pd.read_csv(data / "task2_dm_tests.csv").set_index("horizon")
+    windows = pd.read_csv(data / "task3_window_metrics.csv")
+    rolling = windows.loc[windows.window.eq("Rolling") & windows.model.eq(LEVEL)].set_index("horizon")
+    headline = pd.read_csv(data / "task3_headline_pce_cw.csv").set_index("horizon")
+
+    def gain(h, new, benchmark, metric):
+        return f"{100 * (1 - full.loc[(h, new), metric] / full.loc[(h, benchmark), metric]):.2f}%"
+
+    return {
+        "GOODS_GAINS": "、".join(gain(h, LEVEL, BASE, "rmse") for h in HORIZONS),
+        "GSCPI_HOLM": "、".join(f"{holm.loc[h, 'holm_p']:.4f}" for h in HORIZONS),
+        "RF_GAIN": gain(3, "Random Forest", LEVEL, "rmse"),
+        "RF_MAE_GAIN": gain(3, "Random Forest", LEVEL, "mae"),
+        "RF_DM": f"{dm.loc[3, 'p_value']:.4f}",
+        "HEADLINE_H3_P": f"{headline.loc[3, 'p_value_one_sided']:.4f}",
+        "ROLLING_GAINS": "、".join(f"{rolling.loc[h, 'rmse_improvement_pct']:.2f}%" for h in HORIZONS),
+    }
+
+
 def main():
     markdown = TEMPLATE.read_text(encoding="utf-8")
     for key, value in report_tables().items():
+        markdown = markdown.replace(f"@@{key}@@", f"**{TABLE_TITLES[key]}**\n\n{value}")
+    for key, value in report_scalars().items():
         markdown = markdown.replace(f"@@{key}@@", value)
     if re.search(r"@@[A-Z_]+@@", markdown):
         raise ValueError("Unresolved report table")
